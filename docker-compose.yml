@@ -1,0 +1,41 @@
+name: garmin-mcp
+
+services:
+  garmin-mcp:
+    image: nem0oo/garmin-mcp:latest
+    build: .
+    container_name: garmin-mcp
+    restart: unless-stopped
+    environment:
+      MCP_API_KEY: ${MCP_API_KEY:?MCP_API_KEY is required}
+      GARMIN_PERSONAL_API_KEY: ${GARMIN_PERSONAL_API_KEY:?GARMIN_PERSONAL_API_KEY is required}
+      DOMAIN: ${VIRTUAL_HOST:?VIRTUAL_HOST is required}
+      PORT: "8001"
+      # nginx-proxy / acme-companion
+      VIRTUAL_HOST: ${VIRTUAL_HOST}
+      VIRTUAL_PORT: "8001"
+      LETSENCRYPT_HOST: ${VIRTUAL_HOST}
+    # No `ports:` on purpose: only reachable through nginx-proxy on the shared network.
+    expose:
+      - "8001"
+    networks:
+      - frontend
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 100
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+networks:
+  frontend:
+    name: reseau_interne
+    external: true
