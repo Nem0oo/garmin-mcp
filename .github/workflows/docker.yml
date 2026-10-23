@@ -33,4 +33,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger deploy via n8n
-        run: curl -fsS -H "Content-Type: application/json" "https://n8n.gcourtot.fr/webhook/${{ secrets.N8N_WEBHOOK_ID }}"
+        run: |
+          curl -fsS -H "Content-Type: application/json" "https://n8n.gcourtot.fr/webhook/${{ secrets.N8N_WEBHOOK_ID }}"
