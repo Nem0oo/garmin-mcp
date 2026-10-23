@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+LABEL org.opencontainers.image.title="garmin-mcp" \
+      org.opencontainers.image.description="Read-only MCP server for the official Garmin Connect Personal API"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
