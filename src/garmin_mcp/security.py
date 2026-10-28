@@ -9,14 +9,23 @@ from .config import AUTH_MAX_FAILURES, AUTH_WINDOW_SECONDS, MCP_API_KEY
 
 _failures: dict[str, deque[float]] = defaultdict(deque)
 _OPEN_PATHS = {"/health"}
+# Bound on tracked client IPs, so spoofed or rotating addresses can't grow memory without limit.
+_MAX_TRACKED_IPS = 10_000
 
 
 def _client_ip(scope) -> str:
-    # nginx-proxy sets X-Real-IP / X-Forwarded-For; the app is only reachable through it.
+    # The app is only reachable through nginx-proxy. It overwrites X-Real-IP with the address it
+    # saw, and only appends to X-Forwarded-For: the client controls everything but the last entry.
     headers = dict(scope.get("headers") or [])
-    forwarded = headers.get(b"x-forwarded-for", b"").decode().split(",")[0].strip()
     real = headers.get(b"x-real-ip", b"").decode().strip()
-    return forwarded or real or (scope.get("client") or ("unknown", 0))[0]
+    forwarded = headers.get(b"x-forwarded-for", b"").decode().split(",")[-1].strip()
+    return real or forwarded or (scope.get("client") or ("unknown", 0))[0]
+
+
+def _record_failure(ip: str) -> None:
+    if ip not in _failures and len(_failures) >= _MAX_TRACKED_IPS:
+        _failures.pop(next(iter(_failures)))  # dicts keep insertion order: evict the oldest
+    _failures[ip].append(time.monotonic())
 
 
 def _blocked(ip: str) -> bool:
@@ -61,7 +70,7 @@ class ApiKeyMiddleware:
             resp = JSONResponse({"error": "Too many failed attempts"}, status_code=429, headers={"Retry-After": str(AUTH_WINDOW_SECONDS)})
             return await resp(scope, receive, send)
         if not _valid(scope):
-            _failures[ip].append(time.monotonic())
+            _record_failure(ip)
             resp = JSONResponse({"error": "Unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
             return await resp(scope, receive, send)
         return await self.app(scope, receive, send)
