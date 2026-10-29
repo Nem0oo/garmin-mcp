@@ -34,7 +34,6 @@ Les erreurs Garmin sont renvoyées au client MCP comme erreurs de tool (`isError
 ## Sécurité
 
 - `MCP_API_KEY` (≥ 32 caractères) obligatoire, **uniquement** via le header `Authorization: Bearer <clé>`. Une clé passée dans l'URL (`?api_key=`) est refusée : elle finirait dans les logs du proxy et l'historique. La comparaison se fait sur les octets bruts, en temps constant.
-- Blocage temporaire (429 + `Retry-After`) après `AUTH_MAX_FAILURES` échecs sur une fenêtre glissante de `AUTH_WINDOW_SECONDS` (par défaut 10 en 5 min), par IP. L'IP retenue est `X-Real-IP` (écrasé par nginx-proxy), sinon la dernière entrée de `X-Forwarded-For`. Une IP bloquée reçoit un 429 même avec la bonne clé.
 - Validation du header `Host` / `Origin` (anti DNS rebinding) sur `DOMAIN` : un autre hôte reçoit un 421, une autre origine un 403.
 - Les connexions websocket sont refusées.
 - Logs d'accès uvicorn désactivés. Les erreurs renvoyées au client ne contiennent jamais de secret.
@@ -51,8 +50,6 @@ Les erreurs Garmin sont renvoyées au client MCP comme erreurs de tool (`isError
 | `PORT` | `8001` | Port d'écoute |
 | `HTTP_TIMEOUT` | `30` | Timeout des appels Garmin (s) |
 | `MAX_FILE_BYTES` | `5242880` | Taille max d'un fichier d'activité (octets, avant base64) |
-| `AUTH_MAX_FAILURES` | `10` | Échecs d'authentification avant blocage |
-| `AUTH_WINDOW_SECONDS` | `300` | Fenêtre de comptage des échecs et durée du blocage (s) |
 | `GARMIN_BASE_URL` | `https://personal.connectapi.garmin.com` | URL de l'API Garmin |
 
 ## Déploiement

@@ -5,7 +5,6 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from garmin_mcp import security
-from garmin_mcp.config import AUTH_MAX_FAILURES, AUTH_WINDOW_SECONDS
 
 from .conftest import API_KEY
 
@@ -28,25 +27,6 @@ def client():
     app = Starlette(routes=[Route("/mcp", ok, methods=["GET", "POST"]), Route("/health", ok)])
     app.add_middleware(security.ApiKeyMiddleware)
     return TestClient(app)
-
-
-# --- _client_ip ---------------------------------------------------------------
-
-
-def test_client_ip_prefers_x_real_ip():
-    scope = _scope({b"x-real-ip": b"1.1.1.1", b"x-forwarded-for": b"2.2.2.2"})
-    assert security._client_ip(scope) == "1.1.1.1"
-
-
-def test_client_ip_uses_last_forwarded_entry():
-    # Earlier entries are client-controlled; only the one appended by the proxy counts.
-    scope = _scope({b"x-forwarded-for": b"6.6.6.6, 3.3.3.3"})
-    assert security._client_ip(scope) == "3.3.3.3"
-
-
-def test_client_ip_falls_back_to_socket_peer():
-    assert security._client_ip(_scope()) == "10.0.0.1"
-    assert security._client_ip({**_scope(), "client": None}) == "unknown"
 
 
 # --- _valid ---------------------------------------------------------------------
@@ -94,7 +74,6 @@ def test_non_ascii_key_matches_as_utf8(monkeypatch):
 
 def test_non_utf8_header_does_not_crash():
     assert not security._valid(_scope({b"authorization": b"Bearer \xe9\xff"}, b"api_key=\xe9"))
-    assert security._client_ip(_scope({b"x-real-ip": b"\xff"})) == "\xff"
 
 
 # --- Middleware -------------------------------------------------------------------
@@ -116,52 +95,16 @@ def test_good_key_passes(client):
 
 
 @pytest.mark.parametrize("param", ["api_key", "api-key"])
-def test_key_in_url_is_rejected_and_counted(client, param):
-    r = client.get(f"/mcp?{param}={API_KEY}", headers={"X-Real-IP": "5.5.5.5"})
-    assert r.status_code == 401
-    assert len(security._failures["5.5.5.5"]) == 1
+def test_key_in_url_is_rejected(client, param):
+    assert client.get(f"/mcp?{param}={API_KEY}").status_code == 401
 
 
-def test_ip_is_blocked_after_too_many_failures(client):
+def test_failed_attempts_never_lock_out_the_valid_key(client):
+    # Regression: a per-IP lockout let anyone sharing the client's IP block it, even with the right key.
     ip = {"X-Real-IP": "9.9.9.9"}
-    for _ in range(AUTH_MAX_FAILURES):
+    for _ in range(50):
         assert client.get("/mcp", headers=ip).status_code == 401
-    r = client.get("/mcp", headers={**ip, "Authorization": f"Bearer {API_KEY}"})
-    assert r.status_code == 429
-    assert r.headers["retry-after"] == str(AUTH_WINDOW_SECONDS)
-    # Other clients are unaffected.
-    assert client.get("/mcp", headers={"X-Real-IP": "8.8.8.8", "Authorization": f"Bearer {API_KEY}"}).status_code == 200
-
-
-def test_spoofed_forwarded_for_does_not_bypass_block(client):
-    for i in range(AUTH_MAX_FAILURES):
-        client.get("/mcp", headers={"X-Real-IP": "9.9.9.9", "X-Forwarded-For": f"1.2.3.{i}"})
-    r = client.get("/mcp", headers={"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "4.4.4.4"})
-    assert r.status_code == 429
-
-
-def test_block_expires_after_window(client, monkeypatch):
-    now = [1000.0]
-    monkeypatch.setattr(security.time, "monotonic", lambda: now[0])
-    for _ in range(AUTH_MAX_FAILURES):
-        client.get("/mcp", headers={"X-Real-IP": "9.9.9.9"})
-    assert client.get("/mcp", headers={"X-Real-IP": "9.9.9.9"}).status_code == 429
-    now[0] += AUTH_WINDOW_SECONDS + 1
-    r = client.get("/mcp", headers={"X-Real-IP": "9.9.9.9", "Authorization": f"Bearer {API_KEY}"})
-    assert r.status_code == 200
-    assert "9.9.9.9" not in security._failures
-
-
-def test_successful_requests_do_not_track_ip(client):
-    client.get("/mcp", headers={"X-Real-IP": "7.7.7.7", "Authorization": f"Bearer {API_KEY}"})
-    assert "7.7.7.7" not in security._failures
-
-
-def test_tracked_ips_are_bounded(monkeypatch):
-    monkeypatch.setattr(security, "_MAX_TRACKED_IPS", 3)
-    for ip in ("a", "b", "c", "d"):
-        security._record_failure(ip)
-    assert list(security._failures) == ["b", "c", "d"]
+    assert client.get("/mcp", headers={**ip, "Authorization": f"Bearer {API_KEY}"}).status_code == 200
 
 
 @pytest.mark.anyio
