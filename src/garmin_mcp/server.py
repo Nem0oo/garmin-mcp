@@ -323,7 +323,7 @@ app = build_app()
 
 
 def main() -> None:
-    # access_log disabled: the API key can travel in the query string.
+    # access_log disabled: request details stay out of the logs.
     uvicorn.run(app, host="0.0.0.0", port=PORT, access_log=False, proxy_headers=False)
 
 

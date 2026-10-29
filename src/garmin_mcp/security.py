@@ -1,7 +1,6 @@
 import hmac
 import time
 from collections import defaultdict, deque
-from urllib.parse import parse_qs
 
 from starlette.responses import JSONResponse
 
@@ -13,12 +12,17 @@ _OPEN_PATHS = {"/health"}
 _MAX_TRACKED_IPS = 10_000
 
 
+def _headers(scope) -> dict[bytes, bytes]:
+    return {k.lower(): v for k, v in scope.get("headers") or []}
+
+
 def _client_ip(scope) -> str:
     # The app is only reachable through nginx-proxy. It overwrites X-Real-IP with the address it
     # saw, and only appends to X-Forwarded-For: the client controls everything but the last entry.
-    headers = dict(scope.get("headers") or [])
-    real = headers.get(b"x-real-ip", b"").decode().strip()
-    forwarded = headers.get(b"x-forwarded-for", b"").decode().split(",")[-1].strip()
+    headers = _headers(scope)
+    # Header bytes are latin-1 per the HTTP/ASGI specs; decoding as UTF-8 could raise on arbitrary input.
+    real = headers.get(b"x-real-ip", b"").decode("latin-1").strip()
+    forwarded = headers.get(b"x-forwarded-for", b"").decode("latin-1").split(",")[-1].strip()
     return real or forwarded or (scope.get("client") or ("unknown", 0))[0]
 
 
@@ -39,20 +43,12 @@ def _blocked(ip: str) -> bool:
 
 
 def _valid(scope) -> bool:
-    headers = dict(scope.get("headers") or [])
-    candidates = []
-    auth = headers.get(b"authorization", b"").decode()
-    if auth.lower().startswith("bearer "):
-        candidates.append(auth[7:].strip())
-    # Query-param auth is intentional: claude.ai connectors can only take a URL.
-    query = parse_qs(scope.get("query_string", b"").decode())
-    for name in ("api_key", "api-key"):
-        candidates.extend(query.get(name, []))
-    # Compare every candidate (no early exit) in constant time.
-    ok = False
-    for cand in candidates:
-        ok |= hmac.compare_digest(cand.encode(), MCP_API_KEY.encode())
-    return ok
+    # Only the Authorization header is accepted: a key in the URL ends up in proxy logs and history.
+    # Compared as raw bytes in constant time, so any key (even non-ASCII, sent as UTF-8) matches exactly.
+    auth = _headers(scope).get(b"authorization", b"")
+    if auth[:7].lower() != b"bearer ":
+        return False
+    return hmac.compare_digest(auth[7:].strip(), MCP_API_KEY.encode())
 
 
 class ApiKeyMiddleware:
@@ -62,8 +58,13 @@ class ApiKeyMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["path"] in _OPEN_PATHS:
+        if scope["type"] == "lifespan" or (scope["type"] == "http" and scope["path"] in _OPEN_PATHS):
             return await self.app(scope, receive, send)
+        if scope["type"] != "http":
+            # No websocket endpoint here: refuse anything else instead of passing it through unauthenticated.
+            if scope["type"] == "websocket":
+                return await send({"type": "websocket.close", "code": 1008})
+            return
 
         ip = _client_ip(scope)
         if _blocked(ip):
